@@ -1,0 +1,24 @@
+# Stammdaten: Prozessschritte mit Durchfuehrungsdauer pro Stueck (in Minuten)
+# und minimal erforderlicher Qualifikationsstufe.
+prozessschritte:
+  Drehen:             { dauer_min_pro_stueck: 1.2, min_qualifikation: 2 }
+  Schleifen:          { dauer_min_pro_stueck: 0.8, min_qualifikation: 2 }
+  Polieren:           { dauer_min_pro_stueck: 0.6, min_qualifikation: 2 }
+  Galvanik:           { dauer_min_pro_stueck: 0.4, min_qualifikation: 2 }
+  Montage:            { dauer_min_pro_stueck: 2.5, min_qualifikation: 2 }
+  Prüfung:            { dauer_min_pro_stueck: 0.5, min_qualifikation: 2 }
+  Lackieren:          { dauer_min_pro_stueck: 1.0, min_qualifikation: 2 }
+  Trocknen:           { dauer_min_pro_stueck: 0.2, min_qualifikation: 1 }
+  Laserbeschriftung:  { dauer_min_pro_stueck: 0.3, min_qualifikation: 2 }
+
+# Prozessfolge pro Artikel (fuer naechsten Schritt Ermittlung bei Bedarf)
+prozessfolgen:
+  "Kolbenmechanik M149": [Drehen, Schleifen, Polieren, Montage, Prüfung]
+  "Feder-Set FS-20":     [Laserbeschriftung, Montage, Prüfung]
+  "Clip Meisterstück":   [Galvanik, Montage, Prüfung]
+  "Gehäuse Heritage":    [Lackieren, Trocknen, Montage, Prüfung]
+
+schicht:
+  beginn: "07:00"
+  ende:   "15:30"
+  pause_min: 30
