@@ -12,6 +12,11 @@ dependencies = [
     "msal>=1.28",
     "click>=8.1",
     "pyyaml>=6.0",
+    "botbuilder-core>=4.17",
+    "botbuilder-schema>=4.17",
+    "botbuilder-integration-aiohttp>=4.17",
+    "botframework-connector>=4.17",
+    "aiohttp>=3.9",
 ]
 
 [project.scripts]

@@ -2,13 +2,33 @@
 
 Automatisiert den taeglichen Ablauf in der Mont Blanc Abteilung:
 
-1. **Liest** die Tagesmeldungen der Mitarbeiter aus dem Microsoft Teams Chat.
-2. **Versteht** die Meldungen mit der Claude API – bei Unklarheit wird eine
-   Rueckfrage in Teams gepostet.
-3. **Schreibt** die Losstaende fort.
-4. **Erstellt** den Tagesplan fuer morgen aus Losstaenden, Qualifikationsmatrix
-   und Prozessstammdaten.
-5. **Exportiert** den Plan als Excel und **postet** ihn im Teams-Chat.
+1. **Teams-Bot** (Bot Framework + Adaptive Cards) nimmt Tagesmeldungen der
+   Mitarbeiter entgegen – primaer als strukturierte Karte, wahlweise auch als
+   Freitext (den Claude fuer uns parst, bei Unklarheit kommt eine Rueckfrage-Karte
+   mit Vorbelegung zurueck).
+2. **Orchestrator** liest abends alle Meldungen, schreibt die Losstaende fort
+   und erzeugt den Tagesplan fuer morgen.
+3. Der Tagesplan landet als **Adaptive Card** im Teams-Chat und zusaetzlich als
+   **Excel-Archiv** im `output/`-Ordner.
+
+## Datenfluss
+
+```
+   Mitarbeiter in Teams
+   │
+   │ (1) Adaptive-Card-Submit  ──► Bot (Messaging-Endpoint /api/messages)
+   │                                 │
+   │ (2) Freitext  ────────────────► Bot ──► Claude (messages.parse) ──► Karte zurueck
+                                     │
+                                     ▼
+                               state/meldungen/*.json
+                                     │
+                                     ▼ (abends: montblanc tagesablauf)
+                 data/*.md + stammdaten.yaml ─► Planer ─► Excel + Tagesplan-Karte
+                                                              │
+                                                              ▼
+                                                 proaktiv an alle ConversationRefs
+```
 
 ## Daten
 
@@ -17,11 +37,12 @@ Alle Stammdaten liegen als Markdown / YAML unter `data/`:
 | Datei                         | Inhalt                                          |
 |-------------------------------|-------------------------------------------------|
 | `losstaende.md`               | Aktive Lose mit Menge, Schritt, Prioritaet      |
-| `qualifikationsmatrix.md`     | Mitarbeiter x Prozessschritt, Qualifikationslevel 0-3 |
-| `stammdaten.yaml`             | Prozessschritte (Dauer/Stueck, Mindest-Quali), Schicht |
+| `qualifikationsmatrix.md`     | Mitarbeiter x Prozessschritt, Qualifikation 0-3 |
+| `stammdaten.yaml`             | Prozessschritte (Dauer/Stueck, Min-Quali), Schicht |
 
-Datenpflege passiert direkt in diesen Dateien; der Code liest sie bei jedem Lauf
-neu ein.
+Laufzeit-State liegt in `state/`:
+- `conversation_refs.json` – pro Mitarbeiter der Teams-Kanal zum proaktiven Antworten
+- `meldungen/tagesmeldungen_<DATUM>.json` – was der Bot heute eingesammelt hat
 
 ## Installation
 
@@ -32,64 +53,97 @@ cp .env.example .env      # dann Secrets eintragen
 
 ## Benutzung
 
-**Nur Tagesplan erzeugen** (ohne Teams/Claude, aus den .md-Dateien):
+**Bot starten** (Messaging-Endpoint fuer Teams):
 
 ```bash
-montblanc nur-plan --datum 2026-04-22
+montblanc bot serve
+# laeuft auf http://0.0.0.0:3978/api/messages
 ```
 
-**Kompletter Tagesablauf** (Teams lesen -> Claude verstehen -> Plan -> Teams-Post):
+**Tagesmeldungs-Aufforderung** an alle Mitarbeiter, die schon mal mit dem Bot
+geschrieben haben:
+
+```bash
+montblanc bot prompt-tagesmeldung
+```
+
+**Tagesablauf am Abend** (Plan fuer morgen, Excel, Teams-Post):
 
 ```bash
 montblanc tagesablauf --tag 2026-04-21
 ```
 
-`--tag` ist der Tag der Meldungen (Default: heute). Geplant wird fuer den
-Folgetag.
+**Nur Planung** (keine Teams-Interaktion, aus den .md-Dateien):
+
+```bash
+montblanc nur-plan --datum 2026-04-22
+```
+
+## Azure-Bot-Setup (einmalig)
+
+Die Credentials gehoeren zu *eurer* Azure-AD-App-Registration – niemals meine
+und niemals frei erfunden. Schritt fuer Schritt:
+
+1. **App-Registration** – Azure-Portal -> *Entra ID* -> *App-Registrierungen* ->
+   die bestehende Claude-App auswaehlen (oder neu anlegen). Aus *Uebersicht*
+   ins `.env` uebernehmen:
+   - `MICROSOFT_APP_ID`      = Anwendungs-ID (Client)
+   - `MICROSOFT_APP_TENANT_ID` = Verzeichnis-ID (Tenant)
+2. **Client-Secret** – in derselben App -> *Zertifikate & Geheimnisse* ->
+   *Neuer geheimer Clientschluessel*. Den Wert (nicht die ID!) in
+   `MICROSOFT_APP_PASSWORD` eintragen.
+3. **Bot-Ressource** – Azure-Portal -> *Azure Bot* -> die Ressource, die zur
+   App gehoert. Unter *Configuration* den **Messaging endpoint** setzen:
+   - lokal mit Tunnel: `https://<dein-ngrok-subdomain>.ngrok-free.app/api/messages`
+   - hosted: die oeffentliche URL eures Prozesses + `/api/messages`
+4. **Teams-Channel aktivieren** – Bot-Ressource -> *Channels* -> *Microsoft Teams*
+   hinzufuegen (falls nicht schon aktiv). Bei bestehendem Claude-cowork-Bot
+   ist dieser Channel schon konfiguriert.
+5. **Manifest / Installation** – wenn der Bot in eurem Teams bereits installiert
+   ist (Claude cowork), bleibt der User-Eintrag erhalten; nur der Messaging-
+   Endpoint zeigt ab sofort auf unseren Prozess.
+
+Fuer den reinen Lese-Pfad (Fallback-Backfill via Graph) braucht man
+zusaetzlich App-Permission `ChannelMessage.Read.All` oder `Chat.Read.All`
+und Admin-Consent. Der Bot-Pfad alleine reicht fuer den normalen Betrieb.
 
 ## Architektur
 
 ```
 src/montblanc/
-├─ parsers.py          # .md + .yaml -> Domaenenmodelle
-├─ models.py           # pydantic: Los, Mitarbeiter, Tagesplan, Tagesmeldung, ...
-├─ planer.py           # erstelle_tagesplan: prioritaetsbasierte Zuweisung
-├─ excel_export.py     # Workbook mit Tagesplan/Pro-Mitarbeiter/Hinweise-Sheet
-├─ teams.py            # Graph-API (lesen) + Power Automate Webhook (schreiben)
-├─ claude_understand.py# Claude messages.parse -> strukturierte Tagesmeldung
-├─ config.py           # .env laden
-├─ orchestrator.py     # End-to-End-Ablauf
-└─ cli.py              # click-CLI
+├─ parsers.py           # .md + .yaml -> Domaenenmodelle
+├─ models.py            # pydantic: Los, Mitarbeiter, Tagesplan, Tagesmeldung, ...
+├─ planer.py            # Prioritaets-/Deadline-basierte Zuweisung
+├─ excel_export.py      # Workbook Uebersicht/Pro-Mitarbeiter/Hinweise
+├─ claude_understand.py # messages.parse -> strukturierte Tagesmeldung (Fallback)
+├─ teams.py             # Graph-API-Leser (Backfill-Fallback)
+├─ config.py            # .env laden
+├─ orchestrator.py      # End-to-End
+├─ cli.py               # click-CLI (tagesablauf/nur-plan/bot serve/...)
+└─ bot/
+   ├─ app.py            # aiohttp /api/messages + Adapter-Setup
+   ├─ handler.py        # TeamsActivityHandler (Karten-Submit + Freitext)
+   ├─ cards.py          # Adaptive-Card-Templates
+   ├─ store.py          # TagesmeldungStore (JSON, Bot <-> Orchestrator)
+   ├─ refs.py           # ConversationReference-Store fuer proaktives Senden
+   └─ proactive.py      # continue_conversation-Helper
 ```
 
-### Teams-Integration
+### Claude-Nutzung (Fallback)
 
-**Lesen** erfolgt ueber Microsoft Graph mit App-Auth (Client Credentials).
-Benoetigte App-Permissions (Admin-Consent):
-
-- `ChannelMessage.Read.All` – falls die Reports in einem Team-Channel landen
-- `Chat.Read.All`           – falls sie in einem Gruppen-Chat landen
-
-**Schreiben** laeuft bewusst nicht direkt ueber Graph, weil App-Permissions
-fuer Chat-Nachrichten als *Protected APIs* zu beantragen sind. Stattdessen
-gibt es einen Power Automate Flow "HTTP Request empfangen":
-
-1. HTTP-Trigger mit JSON `{nachricht, dateiname, datei_base64}`
-2. Base64 dekodieren, Datei in SharePoint/OneDrive ablegen
-3. Teams-Nachricht im Ziel-Chat posten (mit Link/Kachel)
-
-Der Flow-URL landet als Secret in `.env` (`POWER_AUTOMATE_WEBHOOK_URL`).
-
-### Claude-Einsatz
-
-In `claude_understand.py`:
+Wenn ein Mitarbeiter *nicht* die Karte ausfuellt, sondern frei schreibt
+("Anna, 100 Stueck L-24001 poliert"), dann laeuft `claude_understand.py`:
 
 - Modell: `claude-opus-4-7`
-- `messages.parse()` mit pydantic-Schema -> typisierte Antwort ohne JSON-Gefrickel
-- Kontextblock (bekannte Mitarbeiter, Schritte, Lose) wird **gecached**
-  (`cache_control: ephemeral`), nur der Meldungstext pro Anfrage kostet voll
-- Bei fehlender/unklarer Info setzt Claude `verstanden=False` und formuliert
-  die Rueckfrage – der Orchestrator postet sie ueber den Power Automate Flow
+- `messages.parse()` mit pydantic-Schema -> typisiertes Ergebnis
+- Kontextblock (bekannte Mitarbeiter, Schritte, Lose) wird gecached
+  (`cache_control: ephemeral`) -> jede weitere Meldung am Tag zahlt nur den
+  Meldungstext
+
+War alles klar, wird die Meldung direkt im Store gespeichert. War etwas
+unklar, setzt Claude `verstanden=false` + `rueckfrage`, und der Bot antwortet
+mit einer **Rueckfrage-Karte** (gleiche Felder wie die Tagesmeldungs-Karte,
+aber vorbelegt mit dem, was Claude rauslesen konnte).
 
 ### Tagesplan-Algorithmus
 
@@ -99,9 +153,9 @@ In `claude_understand.py`:
 2. Pro Los den naechsten Schritt + Mindest-Qualifikation ermitteln.
 3. Qualifizierte Mitarbeiter absteigend nach Qualifikationslevel + Restzeit
    sortieren und nacheinander einplanen, bis die Losmenge zugeteilt ist.
-4. Dauer pro Stueck aus den Stammdaten; Endzeit = Start + Menge x Dauer.
+4. Dauer/Stueck aus Stammdaten; Endzeit = Start + Menge x Dauer.
 5. Hinweise: Lose ohne qualifizierte MA oder ohne Restkapazitaet, sowie
-   komplett freie MA.
+   komplett freie Mitarbeiter.
 
 ## Tests
 
@@ -111,7 +165,9 @@ python -m pytest
 
 ## Entwicklungsstand
 
-Funktionierend: Parser, Planer, Excel-Export, Claude-Verstehen, Teams-Reader.
-Offen fuer den Produktivumzug: echte Teams-Credentials in `.env`, Power
-Automate Flow anlegen und URL eintragen, echte Losstaende/Qualimatrix in
+Funktionierend (getestet): Parser, Planer, Excel-Export, Claude-Verstehen,
+Adaptive-Cards, TagesmeldungStore.
+
+Offen fuer den Produktivumzug: Bot-Credentials in `.env`, Messaging-Endpoint
+in Azure auf die Prozess-URL umbiegen, echte Losstaende/Qualimatrix in
 `data/` hinterlegen.

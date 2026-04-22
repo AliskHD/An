@@ -1,6 +1,7 @@
 """CLI fuer den Tagesplan-Workflow."""
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime
 from pathlib import Path
 
@@ -21,7 +22,7 @@ def main() -> None:
 @main.command()
 @click.option("--tag", type=str, default=None, help="Meldungstag YYYY-MM-DD (Default: heute)")
 def tagesablauf(tag: str | None) -> None:
-    """Kompletter Ablauf: Teams lesen, Claude verstehen, Plan fuer morgen, Excel + Teams-Post."""
+    """Tagesablauf: Meldungen aus Store -> Plan -> Excel -> Teams-Post via Bot."""
     cfg = cfg_module.load()
     tag_date = datetime.strptime(tag, "%Y-%m-%d").date() if tag else date.today()
     pfad = run(cfg, tag_meldungen=tag_date)
@@ -44,6 +45,38 @@ def nur_plan(datum: str | None) -> None:
     export_tagesplan(plan, pfad)
     click.echo(f"{len(plan.zuweisungen)} Zuweisungen, "
                f"{len(plan.nicht_eingeplante_lose)} Hinweise -> {pfad}")
+
+
+@main.group()
+def bot() -> None:
+    """Teams-Bot-Befehle."""
+
+
+@bot.command("serve")
+def bot_serve() -> None:
+    """Startet den Messaging-Endpoint (aiohttp, /api/messages)."""
+    from .bot.app import run_app
+    cfg = cfg_module.load()
+    click.echo(f"Bot laeuft auf http://0.0.0.0:{cfg.bot_port}/api/messages")
+    run_app(cfg)
+
+
+@bot.command("prompt-tagesmeldung")
+def bot_prompt() -> None:
+    """Fordert alle gespeicherten Mitarbeiter proaktiv zur Tagesmeldung auf."""
+    from .bot.app import build_adapter
+    from .bot.cards import prompt_tagesmeldung_card
+    from .bot.proactive import broadcast_card
+    from .bot.refs import ConversationReferenceStore
+
+    cfg = cfg_module.load()
+    if not cfg.bot_app_id:
+        raise click.ClickException("MICROSOFT_APP_ID nicht gesetzt.")
+    adapter = build_adapter(cfg)
+    refs = ConversationReferenceStore(cfg.state_dir / "conversation_refs.json")
+    karte = prompt_tagesmeldung_card()
+    asyncio.run(broadcast_card(adapter, cfg.bot_app_id, refs, karte))
+    click.echo(f"Aufforderung an {len(refs.all())} Mitarbeiter gesendet.")
 
 
 if __name__ == "__main__":
