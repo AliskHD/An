@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motorrad Foto Sortierer</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel2: #334155;
+    --border: #334155; --border2: #475569; --text: #e2e8f0;
+    --muted: #94a3b8; --accent: #3b82f6; --green: #16a34a;
+    --red: #dc2626; --amber: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text);
+         font-family: system-ui, -apple-system, sans-serif; margin: 0; }
+  header { padding: 1rem; background: var(--panel);
+           border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10; }
+  h1 { margin: 0 0 0.75rem; font-size: 1.25rem; }
+  .controls { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; }
+  .controls label { display: flex; flex-direction: column; gap: 0.25rem;
+                    font-size: 0.75rem; color: var(--muted); }
+  .controls input, .controls select, .controls button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border2);
+    padding: 0.5rem 0.75rem; border-radius: 0.375rem; font-size: 0.875rem; }
+  .controls input { min-width: 7rem; }
+  .controls button { cursor: pointer; }
+  .controls button:hover { background: var(--border2); }
+  .controls button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .controls button.primary:hover { background: #2563eb; }
+  .stats { padding: 0.5rem 1rem; background: var(--panel);
+           font-size: 0.8rem; color: var(--muted);
+           border-top: 1px solid var(--border); }
+  .preview { padding: 0.5rem 1rem; background: var(--bg);
+             font-family: ui-monospace, monospace; font-size: 0.8rem; color: var(--muted); }
+  .grid { display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+          gap: 0.75rem; padding: 1rem; }
+  .photo { background: var(--panel); border: 2px solid var(--border);
+           border-radius: 0.5rem; overflow: hidden; transition: border-color 0.1s; }
+  .photo.discard { opacity: 0.4; border-color: var(--red); }
+  .photo.info { border-color: var(--amber); }
+  .photo:focus-within { border-color: var(--accent); }
+  .photo img { width: 100%; height: 160px; object-fit: cover;
+               cursor: zoom-in; background: #000; display: block; }
+  .photo .meta { padding: 0.4rem 0.5rem; font-size: 0.7rem;
+                 color: var(--muted); border-bottom: 1px solid var(--border); }
+  .photo .nr { padding: 0.5rem; }
+  .photo .nr input { width: 100%; background: var(--bg); color: var(--text);
+                     border: 1px solid var(--border2); padding: 0.4rem;
+                     border-radius: 0.25rem; font-size: 1.1rem;
+                     font-weight: 700; text-align: center;
+                     letter-spacing: 0.1em; }
+  .photo .badges { display: flex; gap: 0.25rem; padding: 0 0.5rem 0.4rem; flex-wrap: wrap; }
+  .badge { padding: 0.125rem 0.375rem; border-radius: 0.25rem;
+           font-size: 0.65rem; font-weight: 600; }
+  .badge.sharp { background: var(--green); color: white; }
+  .badge.blurry { background: var(--red); color: white; }
+  .badge.info { background: var(--amber); color: #1c1917; }
+  .badge.dt { background: var(--panel2); color: var(--muted); }
+  .actions { display: flex; padding: 0 0.5rem 0.5rem; gap: 0.25rem; }
+  .actions button { flex: 1; background: var(--panel2); color: var(--text);
+                    border: 0; padding: 0.35rem; border-radius: 0.25rem;
+                    cursor: pointer; font-size: 0.7rem; }
+  .actions button:hover { background: var(--border2); }
+  .actions button.on { background: var(--amber); color: #1c1917; }
+  .actions button.del { background: var(--red); color: white; }
+  .empty { text-align: center; padding: 4rem; color: var(--muted); }
+  .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.95);
+              display: none; align-items: center; justify-content: center;
+              z-index: 100; }
+  .lightbox.show { display: flex; }
+  .lightbox img { max-width: 95vw; max-height: 95vh; object-fit: contain; }
+  .lightbox .close { position: absolute; top: 1rem; right: 1rem;
+                     background: var(--panel); color: white; border: 0;
+                     padding: 0.5rem 0.75rem; border-radius: 0.25rem;
+                     cursor: pointer; }
+  progress { width: 100%; height: 0.4rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Motorrad Foto Sortierer</h1>
+  <div class="controls">
+    <label>Datum (YYMMDD)<input id="datum" maxlength="6"></label>
+    <label>Rennstrecke<input id="strecke" value="Most" list="strecken"></label>
+    <datalist id="strecken">
+      <option>Most</option><option>Sachsenring</option><option>Brno</option>
+      <option>Lausitzring</option><option>Schleiz</option><option>Oschersleben</option>
+      <option>Slovakiaring</option><option>Pannoniaring</option><option>Salzburgring</option>
+      <option>Red_Bull_Ring</option><option>Assen</option>
+    </datalist>
+    <label>Schaerfe-Schwelle<input id="schwelle" type="number" value="50" min="0" max="500"></label>
+    <label>Zeit-Fenster (s)<input id="fenster" type="number" value="60" min="5"></label>
+    <button id="open">Ordner oeffnen</button>
+    <button id="ocr">OCR ausfuehren</button>
+    <button id="cluster">Auto-Cluster</button>
+    <button id="save" class="primary">Sortieren &amp; Speichern</button>
+  </div>
+  <div class="preview" id="preview">Beispiel: 0026_260506_Most_001_0026.jpg</div>
+  <div class="stats" id="stats">Noch kein Ordner geoeffnet.</div>
+</header>
+<main>
+  <div class="grid" id="grid">
+    <div class="empty">
+      Klicke <b>Ordner oeffnen</b> und waehle den Ordner mit den Fotos.<br><br>
+      Funktioniert in Chrome / Edge / Opera. Schreibt umbenannte Kopien in
+      einen Unterordner <code>sortiert/&lt;Startnummer&gt;/</code>.
+    </div>
+  </div>
+</main>
+<div class="lightbox" id="lightbox">
+  <button class="close" onclick="closeLightbox()">Schliessen (Esc)</button>
+  <img id="lightbox-img" alt="">
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+const state = { dirHandle: null, photos: [] };
+
+const pad = (n, w) => String(n).padStart(w, '0');
+const todayYYMMDD = () => {
+  const d = new Date();
+  return pad(d.getFullYear() % 100, 2) + pad(d.getMonth() + 1, 2) + pad(d.getDate(), 2);
+};
+$('datum').value = todayYYMMDD();
+
+function updatePreview() {
+  const datum = $('datum').value || 'YYMMDD';
+  const strecke = $('strecke').value || 'Strecke';
+  $('preview').textContent = `Beispiel: 0026_${datum}_${strecke}_001_0026.jpg`;
+}
+$('datum').addEventListener('input', updatePreview);
+$('strecke').addEventListener('input', updatePreview);
+updatePreview();
+
+// --- Schaerfe-Score (Laplacian-Varianz auf 256px Graustufen) ---
+async function blurScore(blob) {
+  const img = new Image();
+  img.src = URL.createObjectURL(blob);
+  try { await img.decode(); } catch (e) { URL.revokeObjectURL(img.src); return 0; }
+  const W = 256;
+  const H = Math.max(64, Math.round((img.naturalHeight / img.naturalWidth) * W));
+  const canvas = ('OffscreenCanvas' in self) ? new OffscreenCanvas(W, H)
+                                              : Object.assign(document.createElement('canvas'), {width: W, height: H});
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, W, H);
+  const px = ctx.getImageData(0, 0, W, H).data;
+  URL.revokeObjectURL(img.src);
+  const gray = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    gray[i] = 0.299 * px[i*4] + 0.587 * px[i*4+1] + 0.114 * px[i*4+2];
+  }
+  let sum = 0, count = 0;
+  const lap = new Float32Array(W * H);
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      const v = -gray[i-W] - gray[i-1] + 4*gray[i] - gray[i+1] - gray[i+W];
+      lap[i] = v; sum += v; count++;
+    }
+  }
+  const mean = sum / count;
+  let varSum = 0;
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      const d = lap[i] - mean; varSum += d * d;
+    }
+  }
+  return Math.round(varSum / count);
+}
+
+// --- Ordner einlesen ---
+async function loadFolder() {
+  if (!window.showDirectoryPicker) {
+    alert('Browser unterstuetzt File System Access API nicht. Bitte Chrome, Edge oder Opera verwenden.');
+    return;
+  }
+  try {
+    state.dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+  } catch (e) { return; }
+
+  const photos = [];
+  for await (const entry of state.dirHandle.values()) {
+    if (entry.kind !== 'file') continue;
+    if (!/\.(jpe?g|png|heic|webp|tiff?)$/i.test(entry.name)) continue;
+    const file = await entry.getFile();
+    photos.push({
+      handle: entry, name: entry.name, blob: file,
+      url: URL.createObjectURL(file),
+      dt: file.lastModified, exifDt: null,
+      sharpness: null, sharp: null,
+      nummer: '', info: false, discard: false,
+      ocrTried: false, _el: null,
+    });
+  }
+
+  // EXIF parallel parsen
+  await Promise.all(photos.map(async p => {
+    try {
+      const exif = await exifr.parse(p.blob, { pick: ['DateTimeOriginal'] });
+      if (exif?.DateTimeOriginal) { p.exifDt = exif.DateTimeOriginal.getTime(); p.dt = p.exifDt; }
+    } catch {}
+  }));
+
+  photos.sort((a, b) => a.dt - b.dt);
+  state.photos = photos;
+  renderGrid();
+
+  // Schaerfe sequenziell im Hintergrund
+  const schwelle = +$('schwelle').value;
+  for (const p of state.photos) {
+    p.sharpness = await blurScore(p.blob);
+    p.sharp = p.sharpness >= schwelle;
+    if (!p.sharp) p.discard = true;
+    renderPhoto(p);
+    updateStats();
+  }
+}
+
+// --- Render ---
+function renderGrid() {
+  const grid = $('grid');
+  grid.innerHTML = '';
+  if (!state.photos.length) {
+    grid.innerHTML = '<div class="empty">Keine Bilder gefunden.</div>';
+    return;
+  }
+  for (const p of state.photos) {
+    const el = document.createElement('div');
+    el.className = 'photo';
+    el.tabIndex = 0;
+    p._el = el;
+    grid.appendChild(el);
+    renderPhoto(p);
+  }
+  updateStats();
+}
+
+function renderPhoto(p) {
+  const el = p._el; if (!el) return;
+  el.classList.toggle('discard', p.discard);
+  el.classList.toggle('info', p.info);
+  const dtStr = p.exifDt
+    ? new Date(p.exifDt).toLocaleTimeString('de-DE')
+    : new Date(p.dt).toLocaleTimeString('de-DE');
+  const sharpBadge = p.sharpness == null
+    ? '<span class="badge dt">…</span>'
+    : (p.sharp
+        ? `<span class="badge sharp">scharf ${p.sharpness}</span>`
+        : `<span class="badge blurry">unscharf ${p.sharpness}</span>`);
+  const infoBadge = p.info ? '<span class="badge info">INFO</span>' : '';
+  el.innerHTML = `
+    <img loading="lazy" src="${p.url}" alt="${p.name}">
+    <div class="meta">${escapeHtml(p.name)}<br>${dtStr}</div>
+    <div class="badges">${sharpBadge}${infoBadge}</div>
+    <div class="nr"><input type="text" inputmode="numeric"
+                          value="${escapeHtml(p.nummer)}"
+                          maxlength="4"
+                          placeholder="Startnr"></div>
+    <div class="actions">
+      <button data-act="info" class="${p.info ? 'on' : ''}">${p.info ? '✓ Info' : 'Info'}</button>
+      <button data-act="ocr">OCR</button>
+      <button data-act="discard" class="${p.discard ? 'del' : ''}">${p.discard ? '✗ Verworfen' : 'Verwerfen'}</button>
+    </div>`;
+  el.querySelector('img').addEventListener('click', () => openLightbox(p.url));
+  const inp = el.querySelector('.nr input');
+  inp.addEventListener('change', () => {
+    p.nummer = inp.value.replace(/\D+/g, '').slice(0, 4);
+    inp.value = p.nummer;
+    propagateForward(p);
+    updateStats();
+  });
+  el.querySelector('[data-act="info"]').addEventListener('click', () => {
+    p.info = !p.info; renderPhoto(p);
+  });
+  el.querySelector('[data-act="ocr"]').addEventListener('click', () => ocrSingle(p));
+  el.querySelector('[data-act="discard"]').addEventListener('click', () => {
+    p.discard = !p.discard; renderPhoto(p); updateStats();
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// --- Vorwaertsausbreiten innerhalb des Zeitfensters ---
+function propagateForward(fromPhoto) {
+  const i = state.photos.indexOf(fromPhoto);
+  if (i < 0 || !fromPhoto.nummer) return;
+  const fenster = (+$('fenster').value || 60) * 1000;
+  for (let j = i + 1; j < state.photos.length; j++) {
+    const next = state.photos[j];
+    const prev = state.photos[j - 1];
+    if (next.dt - prev.dt > fenster) break;
+    if (next.nummer && next.nummer !== fromPhoto.nummer) break;
+    if (!next.nummer) {
+      next.nummer = fromPhoto.nummer;
+      const inp = next._el?.querySelector('.nr input');
+      if (inp) inp.value = next.nummer;
+    }
+  }
+}
+
+// --- Auto-Cluster: alles innerhalb des Zeitfensters ist eine Gruppe;
+//     erstes Bild bekommt das Info-Flag, gemeinsame Nummer wird leer gelassen ---
+function autoCluster() {
+  if (!state.photos.length) return;
+  const fenster = (+$('fenster').value || 60) * 1000;
+  let lastDt = -Infinity;
+  for (const p of state.photos) {
+    if (p.dt - lastDt > fenster && !p.discard) p.info = true;
+    lastDt = p.dt;
+    renderPhoto(p);
+  }
+}
+
+// --- OCR ueber Tesseract.js ---
+let _worker = null;
+async function getWorker() {
+  if (_worker) return _worker;
+  $('stats').textContent = 'OCR-Worker startet …';
+  _worker = await Tesseract.createWorker('eng');
+  await _worker.setParameters({
+    tessedit_char_whitelist: '0123456789',
+    tessedit_pageseg_mode: '6',
+  });
+  return _worker;
+}
+
+async function ocrSingle(p) {
+  try {
+    const worker = await getWorker();
+    const { data } = await worker.recognize(p.blob);
+    const txt = (data.text || '').replace(/\D+/g, '').slice(0, 4);
+    if (txt.length >= 1 && txt.length <= 4) {
+      p.nummer = txt;
+      const inp = p._el?.querySelector('.nr input');
+      if (inp) inp.value = p.nummer;
+      propagateForward(p);
+      updateStats();
+    }
+    p.ocrTried = true;
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function ocrAll() {
+  const candidates = state.photos.filter(p => !p.discard && !p.nummer && !p.ocrTried);
+  // Falls Info-Flags gesetzt sind, lieber nur die OCR-en (Front-Ansichten)
+  const infos = candidates.filter(p => p.info);
+  const list = infos.length ? infos : candidates;
+  for (let i = 0; i < list.length; i++) {
+    $('stats').textContent = `OCR ${i+1} / ${list.length} …`;
+    await ocrSingle(list[i]);
+  }
+  updateStats();
+}
+
+// --- Stats ---
+function updateStats() {
+  const t = state.photos.length;
+  const s = state.photos.filter(p => p.sharp === true).length;
+  const u = state.photos.filter(p => p.sharp === false).length;
+  const d = state.photos.filter(p => p.discard).length;
+  const a = state.photos.filter(p => !p.discard && p.nummer).length;
+  const grp = new Set(state.photos.filter(p => !p.discard && p.nummer).map(p => p.nummer)).size;
+  $('stats').textContent =
+    `${t} Fotos • ${s} scharf • ${u} unscharf • ${d} verworfen • `
+    + `${a} mit Startnummer (${grp} unterschiedliche Nummern)`;
+}
+
+// --- Speichern ---
+async function saveSorted() {
+  if (!state.dirHandle) { alert('Erst Ordner oeffnen.'); return; }
+  const datum = $('datum').value.trim();
+  const strecke = $('strecke').value.trim().replace(/\s+/g, '_');
+  if (!/^\d{6}$/.test(datum)) { alert('Datum muss YYMMDD (6 Ziffern) sein.'); return; }
+  if (!strecke) { alert('Rennstrecke fehlt.'); return; }
+
+  const sortDir = await state.dirHandle.getDirectoryHandle('sortiert', { create: true });
+  const groups = new Map();
+  for (const p of state.photos) {
+    if (p.discard || !p.nummer) continue;
+    if (!groups.has(p.nummer)) groups.set(p.nummer, []);
+    groups.get(p.nummer).push(p);
+  }
+  if (groups.size === 0) { alert('Keine Fotos mit Startnummer zum Speichern.'); return; }
+
+  let total = 0;
+  for (const [nummer, photos] of groups) {
+    const nrPad = pad(nummer, 4);
+    const nrDir = await sortDir.getDirectoryHandle(nrPad, { create: true });
+    photos.sort((a, b) => a.dt - b.dt);
+    let i = 1;
+    for (const p of photos) {
+      const lfd = pad(i, 3);
+      const ext = (p.name.match(/\.[^.]+$/)?.[0] || '.jpg').toLowerCase();
+      const newName = `${nrPad}_${datum}_${strecke}_${lfd}_${nrPad}${ext}`;
+      const newHandle = await nrDir.getFileHandle(newName, { create: true });
+      const writer = await newHandle.createWritable();
+      await writer.write(p.blob);
+      await writer.close();
+      i++; total++;
+      $('stats').textContent = `Speichere … ${total} Dateien`;
+    }
+  }
+  updateStats();
+  alert(`Fertig: ${groups.size} Startnummern, ${total} Fotos in /sortiert/.`);
+}
+
+// --- Lightbox ---
+function openLightbox(url) {
+  $('lightbox-img').src = url;
+  $('lightbox').classList.add('show');
+}
+function closeLightbox() {
+  $('lightbox').classList.remove('show');
+  $('lightbox-img').src = '';
+}
+$('lightbox').addEventListener('click', e => { if (e.target.id === 'lightbox') closeLightbox(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeLightbox();
+});
+
+$('open').addEventListener('click', loadFolder);
+$('ocr').addEventListener('click', ocrAll);
+$('cluster').addEventListener('click', autoCluster);
+$('save').addEventListener('click', () => saveSorted().catch(e => { alert(e.message); console.error(e); }));
+</script>
+</body>
+</html>
