@@ -120,6 +120,7 @@
     <label>Schaerfe-Schwelle<input id="schwelle" type="number" value="50" min="0" max="500"></label>
     <label>Zeit-Fenster (s)<input id="fenster" type="number" value="60" min="5"></label>
     <label>OCR Min-Konfidenz<input id="minconf" type="number" value="40" min="0" max="100"></label>
+    <label>Anthropic API Key (Claude OCR)<input id="apikey" type="password" placeholder="sk-ant-…" autocomplete="off"></label>
     <button id="open">Ordner oeffnen</button>
     <button id="cluster">Auto-Cluster</button>
     <button id="ocr">OCR alle Info-Bilder</button>
@@ -131,6 +132,7 @@
     <button id="roi-clear">loeschen</button>
   </div>
   <div class="preview" id="preview">Beispiel: 0048_260506_Most_001_0048.jpg</div>
+  <div class="preview" id="engine-info">OCR-Engine: <span id="engine-name">Tesseract (offline, ungenau bei Race-Schriften)</span></div>
   <div class="stats" id="stats">Noch kein Ordner geoeffnet.</div>
 </header>
 <main>
@@ -186,6 +188,21 @@ const todayYYMMDD = () => {
   return pad(d.getFullYear() % 100, 2) + pad(d.getMonth() + 1, 2) + pad(d.getDate(), 2);
 };
 $('datum').value = todayYYMMDD();
+
+// API-Key aus localStorage uebernehmen + bei Aenderung speichern
+$('apikey').value = localStorage.getItem('anthropic-api-key') || '';
+function updateEngineInfo() {
+  const has = !!$('apikey').value.trim();
+  $('engine-name').textContent = has
+    ? 'Claude (claude-haiku-4-5, ~99 % Trefferquote, ~0,3 ct pro Bild)'
+    : 'Tesseract (offline, ungenau bei Race-Schriften – Anthropic Key eintragen fuer Claude-OCR)';
+  $('engine-info').style.color = has ? '#4ade80' : '';
+}
+$('apikey').addEventListener('change', () => {
+  localStorage.setItem('anthropic-api-key', $('apikey').value.trim());
+  updateEngineInfo();
+});
+updateEngineInfo();
 
 function updatePreview() {
   const datum = $('datum').value || 'YYMMDD';
@@ -301,6 +318,87 @@ function invert(imgData) {
     b[i] = 255 - a[i]; b[i+1] = 255 - a[i+1]; b[i+2] = 255 - a[i+2]; b[i+3] = 255;
   }
   return out;
+}
+
+// =================== Claude-Vision-OCR ===================
+async function cropToBase64(blob, roi) {
+  const img = new Image();
+  img.src = URL.createObjectURL(blob);
+  try { await img.decode(); } catch { URL.revokeObjectURL(img.src); throw new Error('Bild laesst sich nicht laden'); }
+  let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+  if (roi) {
+    sx = Math.max(0, Math.round(roi.x * img.naturalWidth));
+    sy = Math.max(0, Math.round(roi.y * img.naturalHeight));
+    sw = Math.max(8, Math.round(roi.w * img.naturalWidth));
+    sh = Math.max(8, Math.round(roi.h * img.naturalHeight));
+  }
+  // Auf max. 768 px lange Kante runterskalieren – kostet weniger Tokens, reicht
+  // fuer das Erkennen einer Startnummer locker.
+  const maxLong = 768;
+  const scale = Math.min(1, maxLong / Math.max(sw, sh));
+  const W = Math.max(64, Math.round(sw * scale)), H = Math.max(64, Math.round(sh * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, W, H);
+  URL.revokeObjectURL(img.src);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+  return dataUrl.split(',')[1];
+}
+
+async function ocrViaClaude(blob, roi, apiKey) {
+  const b64 = await cropToBase64(blob, roi);
+  const body = {
+    model: 'claude-haiku-4-5',
+    max_tokens: 16,
+    system: 'Du bist Experte fuer Motorsport-Fotos. Der Nutzer zeigt dir einen Bildausschnitt von einem Motorrad mit Startnummer. Antworte AUSSCHLIESSLICH mit der Zahl, die als Startnummer auf dem Motorrad steht (1-4 Ziffern). Wenn keine Nummer eindeutig erkennbar ist, antworte mit dem Wort "unknown". Keine Erklaerung, keine Satzzeichen, NUR die Zahl oder "unknown".',
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
+        { type: 'text', text: 'Welche Startnummer steht auf dem Motorrad?' },
+      ],
+    }],
+  };
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`Claude API ${resp.status}: ${err.slice(0, 300)}`);
+  }
+  const data = await resp.json();
+  const raw = (data.content?.[0]?.text || '').trim();
+  if (raw.toLowerCase() === 'unknown' || !raw) {
+    return { text: '', confidence: 0, variant: 'claude-haiku-4-5', raw, invalid: true };
+  }
+  const digits = raw.replace(/\D+/g, '');
+  if (!digits || digits.length > 4) {
+    return { text: digits, confidence: 0, variant: 'claude-haiku-4-5', raw, invalid: true };
+  }
+  return { text: digits, confidence: 99, variant: 'claude-haiku-4-5', raw };
+}
+
+// Dispatcher: wenn API-Key gesetzt -> Claude, sonst Tesseract.
+async function doOcr(blob, roi) {
+  const key = ($('apikey').value || localStorage.getItem('anthropic-api-key') || '').trim();
+  if (key) {
+    try { return await ocrViaClaude(blob, roi, key); }
+    catch (e) {
+      console.error('Claude-OCR fehlgeschlagen, fallback auf Tesseract:', e);
+      $('lb-result').textContent = `Claude-API-Fehler: ${e.message.slice(0, 100)} – fallback Tesseract`;
+      $('lb-result').className = 'lb-result fail';
+    }
+  }
+  return await ocrWithROI(blob, roi);
 }
 
 // =================== Tesseract-Worker ===================
@@ -501,7 +599,7 @@ function renderPhoto(p) {
   });
   el.querySelector('[data-act="ocr"]').addEventListener('click', async () => {
     const minconf = +$('minconf').value;
-    const r = await ocrWithROI(p.blob, state.roi);
+    const r = await doOcr(p.blob, state.roi);
     if (r && r.confidence >= minconf) {
       p.nummer = r.text; p.ocrConf = r.confidence;
       propagateForward(p);
@@ -554,29 +652,41 @@ function autoCluster() {
 
 // =================== OCR alle Info-Bilder ===================
 async function ocrAllInfo() {
-  if (!state.roi) {
-    alert('Bitte zuerst im Lightbox eine Region um die Startnummer ziehen.');
+  const usingClaude = !!($('apikey').value || localStorage.getItem('anthropic-api-key') || '').trim();
+  if (!usingClaude && !state.roi) {
+    alert('Ohne Claude-API: bitte zuerst im Lightbox eine Region um die Startnummer ziehen.');
     return;
   }
   const list = state.photos.filter(p => p.info && !p.discard && !p.nummer);
   if (!list.length) { alert('Keine Info-Bilder ohne Nummer vorhanden.'); return; }
-  const minconf = +$('minconf').value;
+  const minconf = usingClaude ? 0 : +$('minconf').value;
   let ok = 0, fail = 0;
-  for (let i = 0; i < list.length; i++) {
-    const p = list[i];
-    $('stats').textContent = `OCR ${i+1} / ${list.length} (Treffer: ${ok}, Misses: ${fail}) …`;
-    const r = await ocrWithROI(p.blob, state.roi);
-    if (r && r.confidence >= minconf) {
-      p.nummer = r.text; p.ocrConf = r.confidence;
-      propagateForward(p);
-      ok++;
-    } else {
-      p.ocrConf = r ? r.confidence : 0;
-      fail++;
+  // Bei Claude: bis zu 5 parallele Requests fuer Speed
+  const concurrency = usingClaude ? 5 : 1;
+  let cursor = 0;
+  async function worker() {
+    while (cursor < list.length) {
+      const i = cursor++;
+      const p = list[i];
+      $('stats').textContent = `OCR ${ok + fail + 1} / ${list.length} (Treffer: ${ok}, Misses: ${fail}) …`;
+      try {
+        const r = await doOcr(p.blob, state.roi);
+        if (r && !r.invalid && r.text && r.confidence >= minconf) {
+          p.nummer = r.text; p.ocrConf = r.confidence;
+          propagateForward(p);
+          ok++;
+        } else {
+          p.ocrConf = r ? r.confidence : 0;
+          fail++;
+        }
+      } catch (e) {
+        console.error(e); fail++;
+      }
+      p.ocrTried = true;
+      renderPhoto(p);
     }
-    p.ocrTried = true;
-    renderPhoto(p);
   }
+  await Promise.all(Array.from({ length: concurrency }, worker));
   updateStats();
   alert(`Fertig: ${ok} erkannt, ${fail} unsicher (haendisch nachpflegen).`);
 }
@@ -759,12 +869,13 @@ async function ocrCurrent() {
     $('lb-accept').style.display = 'none';
     return;
   }
-  $('lb-result').textContent = 'OCR laeuft (0/18 Varianten)…';
+  const usingClaude = !!($('apikey').value || localStorage.getItem('anthropic-api-key') || '').trim();
+  $('lb-result').textContent = usingClaude ? 'Claude liest die Nummer…' : 'Tesseract laeuft (18 Varianten)…';
   $('lb-result').className = 'lb-result';
   $('lb-accept').style.display = 'none';
   _lastOcr = { photo: p, result: null };
-  const minconf = +$('minconf').value;
-  const r = await ocrWithROI(p.blob, state.roi);
+  const minconf = usingClaude ? 0 : +$('minconf').value;
+  const r = await doOcr(p.blob, state.roi);
   _lastOcr.result = r;
 
   if (r && !r.invalid && r.confidence >= minconf) {

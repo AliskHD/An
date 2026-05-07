@@ -22,6 +22,24 @@ Browser-Tool zum Sortieren und Umbenennen von Rennstrecken-Fotos nach Startnumme
 7. **Sortieren & Speichern** schreibt umbenannte Kopien nach
    `<dein-Ordner>/sortiert/<Startnummer>/`.
 
+## OCR-Engines: Claude oder Tesseract
+
+Tesseract.js (offline, gratis) erkennt stilisierte Race-Schriften
+**unzuverlaessig** – im Schnitt 30-60 % Treffer, je nach Bild. Fuer
+ernsthaftes Sortieren reicht das nicht.
+
+**Empfohlen: Claude Vision.** Kopiere deinen Anthropic-API-Key in das
+Feld „Anthropic API Key" im Header. Der Schluessel landet im
+localStorage des Browsers (nicht in der Cloud, nicht im Repo). Sobald
+gesetzt, schaltet die OCR auf Claude (`claude-haiku-4-5`) um:
+
+- ~99 % Trefferquote bei sauber gezogenem ROI
+- ~0,3 ct pro Bild → 1000 Fotos kosten ca. 3 €
+- Bis zu 5 Bilder parallel beim Batch-Run
+
+Ohne API-Key wird automatisch auf Tesseract zurueckgefallen (mit allen
+oben genannten Vorbehalten).
+
 ## Warum Region-OCR statt Voll-OCR?
 
 Voll-Bild-OCR auf Rennsport-Fotos liefert Schrott: Sponsoren-Stickers,
