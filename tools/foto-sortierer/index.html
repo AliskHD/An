@@ -28,6 +28,13 @@
   .controls button:hover { background: var(--border2); }
   .controls button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
   .controls button.primary:hover { background: #2563eb; }
+  .roi-info { padding: 0.4rem 1rem; background: var(--bg);
+              font-size: 0.75rem; color: var(--muted); display: flex;
+              gap: 0.5rem; align-items: center; }
+  .roi-info .pill { background: var(--accent); color: white; padding: 0.125rem 0.5rem;
+                    border-radius: 0.25rem; font-weight: 600; }
+  .roi-info button { background: transparent; color: var(--muted); border: 0;
+                     cursor: pointer; text-decoration: underline; padding: 0; font-size: 0.75rem; }
   .stats { padding: 0.5rem 1rem; background: var(--panel);
            font-size: 0.8rem; color: var(--muted);
            border-top: 1px solid var(--border); }
@@ -58,6 +65,7 @@
   .badge.blurry { background: var(--red); color: white; }
   .badge.info { background: var(--amber); color: #1c1917; }
   .badge.dt { background: var(--panel2); color: var(--muted); }
+  .badge.ocr { background: var(--accent); color: white; }
   .actions { display: flex; padding: 0 0.5rem 0.5rem; gap: 0.25rem; }
   .actions button { flex: 1; background: var(--panel2); color: var(--text);
                     border: 0; padding: 0.35rem; border-radius: 0.25rem;
@@ -65,17 +73,34 @@
   .actions button:hover { background: var(--border2); }
   .actions button.on { background: var(--amber); color: #1c1917; }
   .actions button.del { background: var(--red); color: white; }
-  .empty { text-align: center; padding: 4rem; color: var(--muted); }
-  .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.95);
-              display: none; align-items: center; justify-content: center;
-              z-index: 100; }
+  .empty { text-align: center; padding: 4rem; color: var(--muted); grid-column: 1 / -1; }
+
+  .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.96);
+              display: none; flex-direction: column; z-index: 100; }
   .lightbox.show { display: flex; }
-  .lightbox img { max-width: 95vw; max-height: 95vh; object-fit: contain; }
-  .lightbox .close { position: absolute; top: 1rem; right: 1rem;
-                     background: var(--panel); color: white; border: 0;
-                     padding: 0.5rem 0.75rem; border-radius: 0.25rem;
-                     cursor: pointer; }
-  progress { width: 100%; height: 0.4rem; }
+  .lb-toolbar { display: flex; gap: 0.5rem; padding: 0.6rem 0.8rem;
+                background: var(--panel); border-bottom: 1px solid var(--border);
+                align-items: center; flex-wrap: wrap; }
+  .lb-toolbar button { background: var(--panel2); color: var(--text); border: 0;
+                       padding: 0.45rem 0.75rem; border-radius: 0.25rem;
+                       cursor: pointer; font-size: 0.85rem; }
+  .lb-toolbar button:hover { background: var(--border2); }
+  .lb-toolbar button.primary { background: var(--accent); }
+  .lb-toolbar button.close { background: var(--red); margin-left: auto; }
+  .lb-toolbar .spacer { flex: 1; }
+  .lb-result { color: var(--text); font-weight: 600; font-size: 0.9rem; min-width: 0; }
+  .lb-result.success { color: #4ade80; }
+  .lb-result.fail { color: #fca5a5; }
+  .lb-stage { flex: 1; overflow: auto; display: flex; align-items: center;
+              justify-content: center; padding: 1rem; }
+  .lb-frame { position: relative; user-select: none; line-height: 0; }
+  .lb-frame img { max-width: 95vw; max-height: 80vh;
+                  object-fit: contain; cursor: crosshair; display: block; }
+  .lb-roi { position: absolute; border: 2px solid var(--accent);
+            background: rgba(59, 130, 246, 0.18); pointer-events: none;
+            display: none; }
+  .lb-roi.show { display: block; }
+  .lb-meta { color: var(--muted); padding: 0.5rem 1rem; font-size: 0.8rem; text-align: center; }
 </style>
 </head>
 <body>
@@ -92,26 +117,51 @@
     </datalist>
     <label>Schaerfe-Schwelle<input id="schwelle" type="number" value="50" min="0" max="500"></label>
     <label>Zeit-Fenster (s)<input id="fenster" type="number" value="60" min="5"></label>
+    <label>OCR Min-Konfidenz<input id="minconf" type="number" value="55" min="0" max="100"></label>
     <button id="open">Ordner oeffnen</button>
-    <button id="ocr">OCR ausfuehren</button>
     <button id="cluster">Auto-Cluster</button>
+    <button id="ocr">OCR alle Info-Bilder</button>
     <button id="save" class="primary">Sortieren &amp; Speichern</button>
   </div>
-  <div class="preview" id="preview">Beispiel: 0026_260506_Most_001_0026.jpg</div>
+  <div class="roi-info" id="roi-info" style="display:none">
+    <span class="pill">ROI gesetzt</span>
+    <span id="roi-text"></span>
+    <button id="roi-clear">loeschen</button>
+  </div>
+  <div class="preview" id="preview">Beispiel: 0048_260506_Most_001_0048.jpg</div>
   <div class="stats" id="stats">Noch kein Ordner geoeffnet.</div>
 </header>
 <main>
   <div class="grid" id="grid">
     <div class="empty">
       Klicke <b>Ordner oeffnen</b> und waehle den Ordner mit den Fotos.<br><br>
-      Funktioniert in Chrome / Edge / Opera. Schreibt umbenannte Kopien in
-      einen Unterordner <code>sortiert/&lt;Startnummer&gt;/</code>.
+      <b>Workflow fuer brauchbare OCR:</b><br>
+      1. Ordner laden, warten bis Schaerfe gemessen ist.<br>
+      2. Ein Foto mit gut sichtbarer Startnummer per Klick im Lightbox oeffnen.<br>
+      3. Mit der Maus ein <b>Rechteck um die Nummer</b> ziehen.<br>
+      4. „OCR diese Region" → die Region wird gemerkt und auf alle weiteren Bilder angewendet.<br>
+      5. „Auf alle Info-Bilder anwenden" → Tool fuellt automatisch alle Info-Bilder und propagiert auf die folgenden Heckbilder.
     </div>
   </div>
 </main>
 <div class="lightbox" id="lightbox">
-  <button class="close" onclick="closeLightbox()">Schliessen (Esc)</button>
-  <img id="lightbox-img" alt="">
+  <div class="lb-toolbar">
+    <button id="lb-prev" title="Pfeil links">← Zurueck</button>
+    <button id="lb-next" title="Pfeil rechts">Weiter →</button>
+    <span class="spacer"></span>
+    <button id="lb-ocr-here" class="primary">OCR diese Region</button>
+    <button id="lb-ocr-info-all">Auf alle Info-Bilder anwenden</button>
+    <button id="lb-clear-roi">Region loeschen</button>
+    <span id="lb-result" class="lb-result"></span>
+    <button class="close" id="lb-close">Schliessen (Esc)</button>
+  </div>
+  <div class="lb-stage">
+    <div class="lb-frame">
+      <img id="lightbox-img" alt="" draggable="false">
+      <div class="lb-roi" id="lb-roi"></div>
+    </div>
+  </div>
+  <div class="lb-meta" id="lb-meta">Ziehe ein Rechteck um die Startnummer, dann „OCR diese Region".</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js"></script>
@@ -120,7 +170,12 @@
 "use strict";
 
 const $ = id => document.getElementById(id);
-const state = { dirHandle: null, photos: [] };
+const state = {
+  dirHandle: null,
+  photos: [],
+  roi: JSON.parse(localStorage.getItem('foto-sortierer-roi') || 'null'),
+  currentLightboxIdx: -1,
+};
 
 const pad = (n, w) => String(n).padStart(w, '0');
 const todayYYMMDD = () => {
@@ -132,13 +187,23 @@ $('datum').value = todayYYMMDD();
 function updatePreview() {
   const datum = $('datum').value || 'YYMMDD';
   const strecke = $('strecke').value || 'Strecke';
-  $('preview').textContent = `Beispiel: 0026_${datum}_${strecke}_001_0026.jpg`;
+  $('preview').textContent = `Beispiel: 0048_${datum}_${strecke}_001_0048.jpg`;
 }
 $('datum').addEventListener('input', updatePreview);
 $('strecke').addEventListener('input', updatePreview);
 updatePreview();
 
-// --- Schaerfe-Score (Laplacian-Varianz auf 256px Graustufen) ---
+function updateRoiInfo() {
+  const r = state.roi;
+  if (!r) { $('roi-info').style.display = 'none'; return; }
+  $('roi-info').style.display = 'flex';
+  $('roi-text').textContent =
+    `x=${(r.x*100).toFixed(0)}%  y=${(r.y*100).toFixed(0)}%  `
+    + `w=${(r.w*100).toFixed(0)}%  h=${(r.h*100).toFixed(0)}%`;
+}
+updateRoiInfo();
+
+// =================== Schaerfe-Score (Laplacian-Varianz) ===================
 async function blurScore(blob) {
   const img = new Image();
   img.src = URL.createObjectURL(blob);
@@ -175,7 +240,115 @@ async function blurScore(blob) {
   return Math.round(varSum / count);
 }
 
-// --- Ordner einlesen ---
+// =================== Bildverarbeitung fuer OCR ===================
+function grayscale(imgData) {
+  const out = new ImageData(imgData.width, imgData.height);
+  const a = imgData.data, b = out.data;
+  for (let i = 0; i < a.length; i += 4) {
+    const g = 0.299 * a[i] + 0.587 * a[i+1] + 0.114 * a[i+2];
+    b[i] = b[i+1] = b[i+2] = g; b[i+3] = 255;
+  }
+  return out;
+}
+function otsuThreshold(grayData) {
+  const data = grayData.data;
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < data.length; i += 4) hist[data[i]]++;
+  const total = data.length / 4;
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0, wB = 0, max = 0, threshold = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t]; if (wB === 0) continue;
+    const wF = total - wB; if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > max) { max = between; threshold = t; }
+  }
+  const out = new ImageData(grayData.width, grayData.height);
+  const o = out.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const v = data[i] > threshold ? 255 : 0;
+    o[i] = o[i+1] = o[i+2] = v; o[i+3] = 255;
+  }
+  return out;
+}
+function invert(imgData) {
+  const out = new ImageData(imgData.width, imgData.height);
+  const a = imgData.data, b = out.data;
+  for (let i = 0; i < a.length; i += 4) {
+    b[i] = 255 - a[i]; b[i+1] = 255 - a[i+1]; b[i+2] = 255 - a[i+2]; b[i+3] = 255;
+  }
+  return out;
+}
+
+// =================== Tesseract-Worker ===================
+let _worker = null;
+async function getWorker() {
+  if (_worker) return _worker;
+  $('stats').textContent = 'OCR-Worker startet (laedt einmalig WASM)…';
+  _worker = await Tesseract.createWorker('eng');
+  await _worker.setParameters({
+    tessedit_char_whitelist: '0123456789',
+    tessedit_pageseg_mode: '7',  // single text line
+  });
+  return _worker;
+}
+
+async function ocrWithROI(blob, roi) {
+  const img = new Image();
+  img.src = URL.createObjectURL(blob);
+  try { await img.decode(); } catch (e) { URL.revokeObjectURL(img.src); return null; }
+
+  let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+  if (roi) {
+    sx = Math.max(0, Math.round(roi.x * img.naturalWidth));
+    sy = Math.max(0, Math.round(roi.y * img.naturalHeight));
+    sw = Math.max(8, Math.round(roi.w * img.naturalWidth));
+    sh = Math.max(8, Math.round(roi.h * img.naturalHeight));
+  }
+  const minLong = 600;
+  const scale = Math.max(1, Math.min(4, minLong / Math.min(sw, sh)));
+  const W = Math.round(sw * scale), H = Math.round(sh * scale);
+  const canvas = ('OffscreenCanvas' in self)
+    ? new OffscreenCanvas(W, H)
+    : Object.assign(document.createElement('canvas'), {width: W, height: H});
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, W, H);
+  URL.revokeObjectURL(img.src);
+
+  const original = ctx.getImageData(0, 0, W, H);
+  const gray = grayscale(original);
+  const thr = otsuThreshold(gray);
+  const variants = [
+    { name: 'gray',         data: gray },
+    { name: 'threshold',    data: thr },
+    { name: 'threshold-inv',data: invert(thr) },
+  ];
+
+  const worker = await getWorker();
+  let best = null;
+  for (const v of variants) {
+    ctx.putImageData(v.data, 0, 0);
+    const inputBlob = await canvas.convertToBlob({ type: 'image/png' });
+    try {
+      const { data } = await worker.recognize(inputBlob);
+      const digits = (data.text || '').replace(/\D+/g, '');
+      if (digits.length === 0 || digits.length > 4) continue;
+      const conf = Math.round(data.confidence || 0);
+      if (!best || conf > best.confidence) {
+        best = { text: digits, confidence: conf, variant: v.name };
+      }
+    } catch (e) { /* try next variant */ }
+  }
+  return best;
+}
+
+// =================== Ordner einlesen ===================
 async function loadFolder() {
   if (!window.showDirectoryPicker) {
     alert('Browser unterstuetzt File System Access API nicht. Bitte Chrome, Edge oder Opera verwenden.');
@@ -196,11 +369,10 @@ async function loadFolder() {
       dt: file.lastModified, exifDt: null,
       sharpness: null, sharp: null,
       nummer: '', info: false, discard: false,
-      ocrTried: false, _el: null,
+      ocrConf: null, ocrTried: false, _el: null,
     });
   }
 
-  // EXIF parallel parsen
   await Promise.all(photos.map(async p => {
     try {
       const exif = await exifr.parse(p.blob, { pick: ['DateTimeOriginal'] });
@@ -212,7 +384,6 @@ async function loadFolder() {
   state.photos = photos;
   renderGrid();
 
-  // Schaerfe sequenziell im Hintergrund
   const schwelle = +$('schwelle').value;
   for (const p of state.photos) {
     p.sharpness = await blurScore(p.blob);
@@ -223,7 +394,7 @@ async function loadFolder() {
   }
 }
 
-// --- Render ---
+// =================== Render ===================
 function renderGrid() {
   const grid = $('grid');
   grid.innerHTML = '';
@@ -231,11 +402,13 @@ function renderGrid() {
     grid.innerHTML = '<div class="empty">Keine Bilder gefunden.</div>';
     return;
   }
-  for (const p of state.photos) {
+  for (let i = 0; i < state.photos.length; i++) {
+    const p = state.photos[i];
     const el = document.createElement('div');
     el.className = 'photo';
     el.tabIndex = 0;
     p._el = el;
+    p._idx = i;
     grid.appendChild(el);
     renderPhoto(p);
   }
@@ -255,10 +428,11 @@ function renderPhoto(p) {
         ? `<span class="badge sharp">scharf ${p.sharpness}</span>`
         : `<span class="badge blurry">unscharf ${p.sharpness}</span>`);
   const infoBadge = p.info ? '<span class="badge info">INFO</span>' : '';
+  const ocrBadge = p.ocrConf != null ? `<span class="badge ocr">OCR ${p.ocrConf}%</span>` : '';
   el.innerHTML = `
     <img loading="lazy" src="${p.url}" alt="${p.name}">
     <div class="meta">${escapeHtml(p.name)}<br>${dtStr}</div>
-    <div class="badges">${sharpBadge}${infoBadge}</div>
+    <div class="badges">${sharpBadge}${infoBadge}${ocrBadge}</div>
     <div class="nr"><input type="text" inputmode="numeric"
                           value="${escapeHtml(p.nummer)}"
                           maxlength="4"
@@ -268,7 +442,7 @@ function renderPhoto(p) {
       <button data-act="ocr">OCR</button>
       <button data-act="discard" class="${p.discard ? 'del' : ''}">${p.discard ? '✗ Verworfen' : 'Verwerfen'}</button>
     </div>`;
-  el.querySelector('img').addEventListener('click', () => openLightbox(p.url));
+  el.querySelector('img').addEventListener('click', () => openLightbox(p._idx));
   const inp = el.querySelector('.nr input');
   inp.addEventListener('change', () => {
     p.nummer = inp.value.replace(/\D+/g, '').slice(0, 4);
@@ -279,7 +453,19 @@ function renderPhoto(p) {
   el.querySelector('[data-act="info"]').addEventListener('click', () => {
     p.info = !p.info; renderPhoto(p);
   });
-  el.querySelector('[data-act="ocr"]').addEventListener('click', () => ocrSingle(p));
+  el.querySelector('[data-act="ocr"]').addEventListener('click', async () => {
+    const minconf = +$('minconf').value;
+    const r = await ocrWithROI(p.blob, state.roi);
+    if (r && r.confidence >= minconf) {
+      p.nummer = r.text; p.ocrConf = r.confidence;
+      propagateForward(p);
+    } else {
+      p.ocrConf = r ? r.confidence : 0;
+    }
+    p.ocrTried = true;
+    renderPhoto(p);
+    updateStats();
+  });
   el.querySelector('[data-act="discard"]').addEventListener('click', () => {
     p.discard = !p.discard; renderPhoto(p); updateStats();
   });
@@ -289,10 +475,10 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-// --- Vorwaertsausbreiten innerhalb des Zeitfensters ---
+// =================== Vorwaerts-Propagation ===================
 function propagateForward(fromPhoto) {
-  const i = state.photos.indexOf(fromPhoto);
-  if (i < 0 || !fromPhoto.nummer) return;
+  const i = fromPhoto._idx;
+  if (i == null || !fromPhoto.nummer) return;
   const fenster = (+$('fenster').value || 60) * 1000;
   for (let j = i + 1; j < state.photos.length; j++) {
     const next = state.photos[j];
@@ -307,8 +493,7 @@ function propagateForward(fromPhoto) {
   }
 }
 
-// --- Auto-Cluster: alles innerhalb des Zeitfensters ist eine Gruppe;
-//     erstes Bild bekommt das Info-Flag, gemeinsame Nummer wird leer gelassen ---
+// =================== Auto-Cluster ===================
 function autoCluster() {
   if (!state.photos.length) return;
   const fenster = (+$('fenster').value || 60) * 1000;
@@ -318,52 +503,39 @@ function autoCluster() {
     lastDt = p.dt;
     renderPhoto(p);
   }
-}
-
-// --- OCR ueber Tesseract.js ---
-let _worker = null;
-async function getWorker() {
-  if (_worker) return _worker;
-  $('stats').textContent = 'OCR-Worker startet …';
-  _worker = await Tesseract.createWorker('eng');
-  await _worker.setParameters({
-    tessedit_char_whitelist: '0123456789',
-    tessedit_pageseg_mode: '6',
-  });
-  return _worker;
-}
-
-async function ocrSingle(p) {
-  try {
-    const worker = await getWorker();
-    const { data } = await worker.recognize(p.blob);
-    const txt = (data.text || '').replace(/\D+/g, '').slice(0, 4);
-    if (txt.length >= 1 && txt.length <= 4) {
-      p.nummer = txt;
-      const inp = p._el?.querySelector('.nr input');
-      if (inp) inp.value = p.nummer;
-      propagateForward(p);
-      updateStats();
-    }
-    p.ocrTried = true;
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-async function ocrAll() {
-  const candidates = state.photos.filter(p => !p.discard && !p.nummer && !p.ocrTried);
-  // Falls Info-Flags gesetzt sind, lieber nur die OCR-en (Front-Ansichten)
-  const infos = candidates.filter(p => p.info);
-  const list = infos.length ? infos : candidates;
-  for (let i = 0; i < list.length; i++) {
-    $('stats').textContent = `OCR ${i+1} / ${list.length} …`;
-    await ocrSingle(list[i]);
-  }
   updateStats();
 }
 
-// --- Stats ---
+// =================== OCR alle Info-Bilder ===================
+async function ocrAllInfo() {
+  if (!state.roi) {
+    alert('Bitte zuerst im Lightbox eine Region um die Startnummer ziehen.');
+    return;
+  }
+  const list = state.photos.filter(p => p.info && !p.discard && !p.nummer);
+  if (!list.length) { alert('Keine Info-Bilder ohne Nummer vorhanden.'); return; }
+  const minconf = +$('minconf').value;
+  let ok = 0, fail = 0;
+  for (let i = 0; i < list.length; i++) {
+    const p = list[i];
+    $('stats').textContent = `OCR ${i+1} / ${list.length} (Treffer: ${ok}, Misses: ${fail}) …`;
+    const r = await ocrWithROI(p.blob, state.roi);
+    if (r && r.confidence >= minconf) {
+      p.nummer = r.text; p.ocrConf = r.confidence;
+      propagateForward(p);
+      ok++;
+    } else {
+      p.ocrConf = r ? r.confidence : 0;
+      fail++;
+    }
+    p.ocrTried = true;
+    renderPhoto(p);
+  }
+  updateStats();
+  alert(`Fertig: ${ok} erkannt, ${fail} unsicher (haendisch nachpflegen).`);
+}
+
+// =================== Stats ===================
 function updateStats() {
   const t = state.photos.length;
   const s = state.photos.filter(p => p.sharp === true).length;
@@ -376,7 +548,7 @@ function updateStats() {
     + `${a} mit Startnummer (${grp} unterschiedliche Nummern)`;
 }
 
-// --- Speichern ---
+// =================== Speichern ===================
 async function saveSorted() {
   if (!state.dirHandle) { alert('Erst Ordner oeffnen.'); return; }
   const datum = $('datum').value.trim();
@@ -415,24 +587,143 @@ async function saveSorted() {
   alert(`Fertig: ${groups.size} Startnummern, ${total} Fotos in /sortiert/.`);
 }
 
-// --- Lightbox ---
-function openLightbox(url) {
-  $('lightbox-img').src = url;
+// =================== Lightbox + ROI ===================
+function openLightbox(idx) {
+  state.currentLightboxIdx = idx;
+  const p = state.photos[idx]; if (!p) return;
+  const img = $('lightbox-img');
+  img.src = p.url;
+  img.onload = () => paintRoi();
+  $('lb-meta').textContent = `${p.name} • ${(new Date(p.dt)).toLocaleString('de-DE')}`;
+  $('lb-result').textContent = '';
+  $('lb-result').className = 'lb-result';
   $('lightbox').classList.add('show');
 }
 function closeLightbox() {
   $('lightbox').classList.remove('show');
   $('lightbox-img').src = '';
+  state.currentLightboxIdx = -1;
 }
-$('lightbox').addEventListener('click', e => { if (e.target.id === 'lightbox') closeLightbox(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeLightbox();
-});
+function navLightbox(delta) {
+  let idx = state.currentLightboxIdx + delta;
+  if (idx < 0 || idx >= state.photos.length) return;
+  openLightbox(idx);
+}
+function paintRoi() {
+  const roiEl = $('lb-roi');
+  const img = $('lightbox-img');
+  if (!state.roi || !img.complete || !img.naturalWidth) {
+    roiEl.classList.remove('show'); return;
+  }
+  const rect = img.getBoundingClientRect();
+  const frameRect = img.parentElement.getBoundingClientRect();
+  roiEl.style.left = (rect.left - frameRect.left + state.roi.x * rect.width) + 'px';
+  roiEl.style.top  = (rect.top  - frameRect.top  + state.roi.y * rect.height) + 'px';
+  roiEl.style.width  = (state.roi.w * rect.width) + 'px';
+  roiEl.style.height = (state.roi.h * rect.height) + 'px';
+  roiEl.classList.add('show');
+}
+window.addEventListener('resize', paintRoi);
 
+// Drag-Logik fuer ROI
+(function setupDrag() {
+  const img = $('lightbox-img');
+  const roiEl = $('lb-roi');
+  let drag = null;
+  img.addEventListener('mousedown', e => {
+    e.preventDefault();
+    const rect = img.getBoundingClientRect();
+    const frameRect = img.parentElement.getBoundingClientRect();
+    drag = {
+      rect, frameRect,
+      sx: e.clientX - rect.left,
+      sy: e.clientY - rect.top,
+    };
+    roiEl.classList.add('show');
+  });
+  document.addEventListener('mousemove', e => {
+    if (!drag) return;
+    const cx = Math.max(0, Math.min(drag.rect.width, e.clientX - drag.rect.left));
+    const cy = Math.max(0, Math.min(drag.rect.height, e.clientY - drag.rect.top));
+    const x = Math.min(drag.sx, cx), y = Math.min(drag.sy, cy);
+    const w = Math.abs(cx - drag.sx), h = Math.abs(cy - drag.sy);
+    roiEl.style.left   = (drag.rect.left - drag.frameRect.left + x) + 'px';
+    roiEl.style.top    = (drag.rect.top  - drag.frameRect.top  + y) + 'px';
+    roiEl.style.width  = w + 'px';
+    roiEl.style.height = h + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!drag) return;
+    const w = parseFloat(roiEl.style.width || 0);
+    const h = parseFloat(roiEl.style.height || 0);
+    if (w >= 8 && h >= 8) {
+      const left = parseFloat(roiEl.style.left) - (drag.rect.left - drag.frameRect.left);
+      const top  = parseFloat(roiEl.style.top)  - (drag.rect.top  - drag.frameRect.top);
+      state.roi = {
+        x: left / drag.rect.width,
+        y: top  / drag.rect.height,
+        w: w / drag.rect.width,
+        h: h / drag.rect.height,
+      };
+      localStorage.setItem('foto-sortierer-roi', JSON.stringify(state.roi));
+      updateRoiInfo();
+    }
+    drag = null;
+  });
+})();
+
+async function ocrCurrent() {
+  const p = state.photos[state.currentLightboxIdx]; if (!p) return;
+  if (!state.roi) { $('lb-result').textContent = 'Erst Region ziehen.'; $('lb-result').className = 'lb-result fail'; return; }
+  $('lb-result').textContent = 'OCR laeuft…';
+  $('lb-result').className = 'lb-result';
+  const minconf = +$('minconf').value;
+  const r = await ocrWithROI(p.blob, state.roi);
+  if (r && r.confidence >= minconf) {
+    p.nummer = r.text; p.ocrConf = r.confidence; p.ocrTried = true;
+    propagateForward(p); renderPhoto(p); updateStats();
+    $('lb-result').textContent = `Erkannt: ${r.text} (${r.confidence}%)`;
+    $('lb-result').className = 'lb-result success';
+  } else if (r) {
+    p.ocrConf = r.confidence; p.ocrTried = true; renderPhoto(p);
+    $('lb-result').textContent = `Unsicher: ${r.text} (${r.confidence}%) – manuell pruefen`;
+    $('lb-result').className = 'lb-result fail';
+  } else {
+    $('lb-result').textContent = 'Nichts erkannt.';
+    $('lb-result').className = 'lb-result fail';
+  }
+}
+
+// =================== Wiring ===================
 $('open').addEventListener('click', loadFolder);
-$('ocr').addEventListener('click', ocrAll);
+$('ocr').addEventListener('click', ocrAllInfo);
 $('cluster').addEventListener('click', autoCluster);
 $('save').addEventListener('click', () => saveSorted().catch(e => { alert(e.message); console.error(e); }));
+$('roi-clear').addEventListener('click', () => {
+  state.roi = null;
+  localStorage.removeItem('foto-sortierer-roi');
+  updateRoiInfo();
+  paintRoi();
+});
+
+$('lb-close').addEventListener('click', closeLightbox);
+$('lb-prev').addEventListener('click', () => navLightbox(-1));
+$('lb-next').addEventListener('click', () => navLightbox(1));
+$('lb-ocr-here').addEventListener('click', ocrCurrent);
+$('lb-ocr-info-all').addEventListener('click', ocrAllInfo);
+$('lb-clear-roi').addEventListener('click', () => {
+  state.roi = null;
+  localStorage.removeItem('foto-sortierer-roi');
+  updateRoiInfo();
+  paintRoi();
+});
+
+document.addEventListener('keydown', e => {
+  if (!$('lightbox').classList.contains('show')) return;
+  if (e.key === 'Escape') closeLightbox();
+  else if (e.key === 'ArrowLeft') navLightbox(-1);
+  else if (e.key === 'ArrowRight') navLightbox(1);
+});
 </script>
 </body>
 </html>
