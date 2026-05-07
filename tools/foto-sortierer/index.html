@@ -95,7 +95,9 @@
               justify-content: center; padding: 1rem; }
   .lb-frame { position: relative; user-select: none; line-height: 0; }
   .lb-frame img { max-width: 95vw; max-height: 80vh;
-                  object-fit: contain; cursor: crosshair; display: block; }
+                  object-fit: contain; cursor: crosshair; display: block;
+                  -webkit-user-drag: none; user-select: none;
+                  -webkit-user-select: none; touch-action: none; }
   .lb-roi { position: absolute; border: 2px solid var(--accent);
             background: rgba(59, 130, 246, 0.18); pointer-events: none;
             display: none; }
@@ -625,25 +627,38 @@ function paintRoi() {
 }
 window.addEventListener('resize', paintRoi);
 
-// Drag-Logik fuer ROI
+// Drag-Logik fuer ROI (Pointer-Events + Pointer-Capture, nativer Bild-Drag gesperrt)
 (function setupDrag() {
   const img = $('lightbox-img');
   const roiEl = $('lb-roi');
   let drag = null;
-  img.addEventListener('mousedown', e => {
+
+  // Nativen Browser-Drag fuer Bilder komplett deaktivieren
+  img.addEventListener('dragstart', e => e.preventDefault());
+
+  img.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return; // nur linke Maustaste
     e.preventDefault();
+    try { img.setPointerCapture(e.pointerId); } catch {}
     const rect = img.getBoundingClientRect();
     const frameRect = img.parentElement.getBoundingClientRect();
     drag = {
-      rect, frameRect,
+      rect, frameRect, pointerId: e.pointerId,
       sx: e.clientX - rect.left,
       sy: e.clientY - rect.top,
     };
+    // Initial leeres Rechteck am Klickpunkt
+    roiEl.style.left   = (rect.left - frameRect.left + drag.sx) + 'px';
+    roiEl.style.top    = (rect.top  - frameRect.top  + drag.sy) + 'px';
+    roiEl.style.width  = '0px';
+    roiEl.style.height = '0px';
     roiEl.classList.add('show');
   });
-  document.addEventListener('mousemove', e => {
-    if (!drag) return;
-    const cx = Math.max(0, Math.min(drag.rect.width, e.clientX - drag.rect.left));
+
+  img.addEventListener('pointermove', e => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    e.preventDefault();
+    const cx = Math.max(0, Math.min(drag.rect.width,  e.clientX - drag.rect.left));
     const cy = Math.max(0, Math.min(drag.rect.height, e.clientY - drag.rect.top));
     const x = Math.min(drag.sx, cx), y = Math.min(drag.sy, cy);
     const w = Math.abs(cx - drag.sx), h = Math.abs(cy - drag.sy);
@@ -652,13 +667,15 @@ window.addEventListener('resize', paintRoi);
     roiEl.style.width  = w + 'px';
     roiEl.style.height = h + 'px';
   });
-  document.addEventListener('mouseup', () => {
-    if (!drag) return;
-    const w = parseFloat(roiEl.style.width || 0);
-    const h = parseFloat(roiEl.style.height || 0);
+
+  function endDrag(e) {
+    if (!drag || (e && e.pointerId !== drag.pointerId)) return;
+    try { img.releasePointerCapture(drag.pointerId); } catch {}
+    const w = parseFloat(roiEl.style.width)  || 0;
+    const h = parseFloat(roiEl.style.height) || 0;
     if (w >= 8 && h >= 8) {
-      const left = parseFloat(roiEl.style.left) - (drag.rect.left - drag.frameRect.left);
-      const top  = parseFloat(roiEl.style.top)  - (drag.rect.top  - drag.frameRect.top);
+      const left = (parseFloat(roiEl.style.left) || 0) - (drag.rect.left - drag.frameRect.left);
+      const top  = (parseFloat(roiEl.style.top)  || 0) - (drag.rect.top  - drag.frameRect.top);
       state.roi = {
         x: left / drag.rect.width,
         y: top  / drag.rect.height,
@@ -667,9 +684,14 @@ window.addEventListener('resize', paintRoi);
       };
       localStorage.setItem('foto-sortierer-roi', JSON.stringify(state.roi));
       updateRoiInfo();
+    } else {
+      // zu klein -> bestehende ROI (falls vorhanden) wieder einblenden
+      paintRoi();
     }
     drag = null;
-  });
+  }
+  img.addEventListener('pointerup', endDrag);
+  img.addEventListener('pointercancel', endDrag);
 })();
 
 async function ocrCurrent() {
